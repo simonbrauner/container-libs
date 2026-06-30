@@ -164,9 +164,18 @@ func (pm *PatternMatcher) Patterns() []*Pattern {
 	return pm.patterns
 }
 
-// Pattern defines a single regexp used to filter file paths.
+type matchType int
+
+const (
+	unknownMatch matchType = iota
+	regexpMatch
+	suffixMatch
+)
+
+// Pattern defines a single pattern used to filter file paths.
 type Pattern struct {
 	cleanedPattern string
+	matchType      matchType
 	regexp         *regexp.Regexp
 	exclusion      bool
 }
@@ -181,10 +190,22 @@ func (p *Pattern) Exclusion() bool {
 }
 
 func (p *Pattern) match(path string) (bool, error) {
-	if p.regexp == nil {
+	if p.matchType == unknownMatch {
 		if err := p.compile(); err != nil {
 			return false, filepath.ErrBadPattern
 		}
+	}
+
+	if p.matchType == suffixMatch {
+		suffix := p.cleanedPattern[2:]
+
+		if strings.HasSuffix(path, suffix) {
+			return true, nil
+		}
+
+		// If the suffix begins with '/', for example "**/foo",
+		// we want to match "foo" but not "barfoo".
+		return suffix[0] == os.PathSeparator && path == suffix[1:], nil
 	}
 
 	b := p.regexp.MatchString(path)
@@ -209,10 +230,12 @@ func (p *Pattern) compile() error {
 		escSL += bs
 	}
 
-	for scan.Peek() != scanner.EOF {
+	for i := 0; scan.Peek() != scanner.EOF; i++ {
 		ch := scan.Next()
 
 		if ch == '*' {
+			p.matchType = regexpMatch
+
 			if scan.Peek() == '*' {
 				// is some flavor of "**"
 				scan.Next()
@@ -233,13 +256,20 @@ func (p *Pattern) compile() error {
 					regStrBuilder.WriteString(escSL)
 					regStrBuilder.WriteString(")?")
 				}
+
+				if i == 0 {
+					p.matchType = suffixMatch
+				}
 			} else {
 				// is "*" so map it to anything but "/"
 				regStrBuilder.WriteString("[^")
 				regStrBuilder.WriteString(escSL)
 				regStrBuilder.WriteString("]*")
+				p.matchType = regexpMatch
 			}
 		} else if ch == '?' {
+			p.matchType = regexpMatch
+
 			// "?" is any char except "/"
 			regStrBuilder.WriteString("[^")
 			regStrBuilder.WriteString(escSL)
@@ -259,12 +289,18 @@ func (p *Pattern) compile() error {
 				continue
 			}
 			if scan.Peek() != scanner.EOF {
+				p.matchType = regexpMatch
+
 				regStrBuilder.WriteString(bs)
 				regStrBuilder.WriteRune(scan.Next())
 			} else {
 				return filepath.ErrBadPattern
 			}
 		} else {
+			if ch == '[' || ch == ']' {
+				p.matchType = regexpMatch
+			}
+
 			regStrBuilder.WriteRune(ch)
 		}
 	}
