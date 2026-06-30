@@ -181,6 +181,10 @@ func (p *Pattern) Exclusion() bool {
 }
 
 func (p *Pattern) match(path string) (bool, error) {
+	if p.doubleAsteriskPrefixMatch(path) {
+		return true, nil
+	}
+
 	if p.regexp == nil {
 		if err := p.compile(); err != nil {
 			return false, filepath.ErrBadPattern
@@ -190,6 +194,21 @@ func (p *Pattern) match(path string) (bool, error) {
 	b := p.regexp.MatchString(path)
 
 	return b, nil
+}
+
+// https://github.com/podman-container-tools/buildah/issues/6417
+func (p *Pattern) doubleAsteriskPrefixMatch(path string) bool {
+	pattern := p.cleanedPattern
+	if !strings.HasPrefix(pattern, "**") || len(pattern) <= 2 || pattern[2] == os.PathSeparator {
+		return false
+	}
+
+	suffix := pattern[2:]
+	if strings.ContainsAny(suffix, "*?[]") {
+		return false
+	}
+
+	return strings.HasSuffix(path, suffix)
 }
 
 func (p *Pattern) compile() error {
